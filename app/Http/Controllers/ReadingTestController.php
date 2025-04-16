@@ -68,18 +68,13 @@ class ReadingTestController extends Controller
         $test = Test::where('slug', $slug)->firstOrFail();
 
         // Lấy tất cả câu hỏi của bài test
-        $questions = Question::whereIn('group_id', function ($query) use ($test) {
-            $query->select('id')
-                ->from('question_groups')
-                ->whereIn('passage_id', function ($query) use ($test) {
-                    $query->select('id')
-                        ->from('passages')
-                        ->where('test_id', $test->id);
-                });
-        })->get();
+        $questions = Question::where('test_id', $test->id)
+            ->orderBy('order', 'asc')
+            ->get();
 
         // Lấy câu trả lời của người dùng
         $userAnswers = $request->input('answer', []);
+        // dd($userAnswers[5]);
 
         // Tính điểm
         $correctAnswers = 0;
@@ -92,15 +87,27 @@ class ReadingTestController extends Controller
             $isCorrect = false;
 
             // Kiểm tra câu trả lời đúng
-            if ($question->question_type == 'matching') {
-                if ($userAnswer == $question->matching_answer) {
+            if ($question->question_type == 'matching' || $question->question_type == 'correct_answer' || $question->question_type == 'fill_in_blank_with_options' || $question->question_type == 'true_false_not_given') {
+                // Đối với dạng matching, so sánh id của option được chọn với matching_answer
+                if ($userAnswer == $question->answers()->first()->correct_answer) {
+                    $correctAnswers++;
+                    $isCorrect = true;
+                }
+            } elseif ($question->question_type == 'fill_in_blank') {
+                // Đối với dạng fill in blank, so sánh chuỗi
+                if (strcasecmp(trim($userAnswer), trim($question->answers()->first()->correct_answer)) == 0) {
                     $correctAnswers++;
                     $isCorrect = true;
                 }
             } else {
-                if (strcasecmp(trim($userAnswer), trim($question->question_answer)) == 0) {
-                    $correctAnswers++;
-                    $isCorrect = true;
+                // Đối với các dạng multiple choice
+                $answers = $question->answers()->get();
+                foreach ($answers as $answer) {
+                    if ($userAnswer == $answer->id) {
+                        $correctAnswers++;
+                        $isCorrect = true;
+                        break;
+                    }
                 }
             }
 
@@ -109,8 +116,14 @@ class ReadingTestController extends Controller
                 'userAnswer' => $userAnswer,
                 'isCorrect' => $isCorrect,
                 'explanation' => $question->explanation ?? '',
+                'correctAnswer' => $this->getCorrectAnswerText($question, $question->answers()->first()->correct_answer)
             ];
         }
+
+        // Sắp xếp lại mảng results theo order của câu hỏi
+        usort($results, function ($a, $b) {
+            return $a['question']->order - $b['question']->order;
+        });
 
         // Tính điểm band
         $bandScore = $this->calculateBandScore($correctAnswers);
@@ -131,5 +144,31 @@ class ReadingTestController extends Controller
             'results' => $results,
             'bandScore' => $bandScore,
         ]);
+    }
+
+    private function getCorrectAnswerText($question, $correctAnswerId)
+    {
+        switch ($question->question_type) {
+            case 'true_false_not_given':
+            case 'fill_in_blank':
+                return $correctAnswerId;
+
+            case 'matching':
+                $matchingOption = MatchingOption::find($correctAnswerId);
+                return $matchingOption ? $matchingOption->option_text : '';
+
+            case 'correct_answer':
+            case 'fill_in_blank_with_options':
+                $questionOption = QuestionOption::find($correctAnswerId);
+                return $questionOption ? $questionOption->option_text : '';
+
+            case 'multiple_choice':
+                $correctAnswers = json_decode($correctAnswerId, true);
+                $options = QuestionOption::whereIn('id', $correctAnswers)->pluck('option_text')->toArray();
+                return implode(', ', $options);
+
+            default:
+                return '';
+        }
     }
 }

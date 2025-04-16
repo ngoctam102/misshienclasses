@@ -8,9 +8,10 @@
             <table class="min-w-full bg-white">
                 <thead>
                     <tr>
-                        <th class="w-1/12 px-4 py-2">#</th>
+                        <th class="w-1/12 px-4 py-2">STT</th>
                         <th class="w-7/12 px-4 py-2">Câu hỏi</th>
                         <th class="w-2/12 px-4 py-2">Trả lời của bạn</th>
+                        <th class="w-2/12 px-4 py-2">Đáp án đúng</th>
                         <th class="w-2/12 px-4 py-2">Kết quả</th>
                     </tr>
                 </thead>
@@ -20,6 +21,7 @@
                         <td class="border px-4 py-2">{{ $index + 1 }}</td>
                         <td class="border px-4 py-2">{!! $result['question']->question_content !!}</td>
                         <td class="border px-4 py-2">{{ $result['userAnswer'] ?? 'Không trả lời' }}</td>
+                        <td class="border px-4 py-2">{{ $result['correctAnswer'] }}</td>
                         <td class="border px-4 py-2">{{ $result['isCorrect'] ? 'Đúng' : 'Sai' }}</td>
                     </tr>
                     <tr>

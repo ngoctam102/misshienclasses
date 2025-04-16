@@ -3,16 +3,16 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\QuestionAnswerResource\Pages;
-use App\Filament\Resources\QuestionAnswerResource\RelationManagers;
 use App\Models\QuestionAnswer;
+use App\Models\QuestionOption;
+use App\Models\MatchingOption;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
-use Filament\Notifications\Notification;
+use Illuminate\Support\Facades\Session;
 
 class QuestionAnswerResource extends Resource
 {
@@ -31,12 +31,18 @@ class QuestionAnswerResource extends Resource
                 Forms\Components\Select::make('test_id')
                     ->relationship('test', 'title')
                     ->required()
-                    ->live(),
+                    ->searchable()
+                    ->preload()
+                    ->live()
+                    ->default(fn() => Session::get('last_test_id'))
+                    ->afterStateUpdated(function ($state) {
+                        Session::put('last_test_id', $state);
+                    }),
                 Forms\Components\Select::make('passage_id')
                     ->relationship(
                         'passage',
                         'title',
-                        fn(Builder $query, Forms\Get $get) =>
+                        fn(Builder $query, $get) =>
                         $query->when(
                             $get('test_id'),
                             fn(Builder $q, $testId) =>
@@ -44,7 +50,11 @@ class QuestionAnswerResource extends Resource
                         )
                     )
                     ->required()
-                    ->live(),
+                    ->live()
+                    ->default(fn() => Session::get('last_passage_id'))
+                    ->afterStateUpdated(function ($state) {
+                        Session::put('last_passage_id', $state);
+                    }),
                 Forms\Components\Select::make('group_id')
                     ->relationship(
                         'group',
@@ -56,8 +66,14 @@ class QuestionAnswerResource extends Resource
                             $q->where('passage_id', $passageId)
                         )
                     )
+                    ->searchable()
+                    ->preload()
                     ->required()
-                    ->live(),
+                    ->live()
+                    ->default(fn() => Session::get('last_group_id'))
+                    ->afterStateUpdated(function ($state) {
+                        Session::put('last_group_id', $state);
+                    }),
                 Forms\Components\Select::make('question_id')
                     ->relationship(
                         'question',
@@ -82,13 +98,13 @@ class QuestionAnswerResource extends Resource
                         }
                     }),
                 Forms\Components\Hidden::make('question_type'),
-                Forms\Components\Section::make('Đáp án')
+                Forms\Components\Section::make('Answer')
                     ->schema(function (Forms\Get $get) {
                         $questionType = $get('question_type');
+                        $questionId = $get('question_id');
 
                         switch ($questionType) {
                             case 'fill_in_blank':
-                            case 'fill_in_blank_with_options':
                                 return [
                                     Forms\Components\TextInput::make('correct_answer')
                                         ->label('Đáp án đúng')
@@ -96,12 +112,30 @@ class QuestionAnswerResource extends Resource
                                         ->maxLength(255),
                                 ];
 
+                            case 'fill_in_blank_with_options':
+                            case 'matching':
                             case 'correct_answer':
                                 return [
-                                    Forms\Components\Textarea::make('correct_answer')
+                                    Forms\Components\Select::make('correct_answer')
                                         ->label('Đáp án đúng')
+                                        ->options(function () use ($questionId, $questionType) {
+                                            if (!$questionId) return [];
+
+                                            if ($questionType === 'matching') {
+                                                $question = \App\Models\Question::find($questionId);
+                                                if (!$question) return [];
+
+                                                return MatchingOption::where('group_id', $question->group_id)
+                                                    ->pluck('option_text', 'id')
+                                                    ->toArray();
+                                            } else {
+                                                return QuestionOption::where('question_id', $questionId)
+                                                    ->pluck('option_text', 'id')
+                                                    ->toArray();
+                                            }
+                                        })
                                         ->required()
-                                        ->maxLength(65535),
+                                        ->live(),
                                 ];
 
                             case 'true_false_not_given':
@@ -118,16 +152,19 @@ class QuestionAnswerResource extends Resource
 
                             case 'multiple_choice':
                                 return [
-                                    Forms\Components\Select::make('correct_answer')
+                                    Forms\Components\CheckboxList::make('correct_answers')
                                         ->label('Đáp án đúng')
-                                        ->options(function (Forms\Get $get) {
-                                            $question = \App\Models\Question::find($get('question_id'));
-                                            if (!$question) return [];
-
-                                            $options = $question->options()->pluck('option_text', 'id')->toArray();
-                                            return $options;
+                                        ->options(function () use ($questionId) {
+                                            if (!$questionId) return [];
+                                            return QuestionOption::where('question_id', $questionId)
+                                                ->pluck('option_text', 'id')
+                                                ->toArray();
                                         })
-                                        ->required(),
+                                        ->required()
+                                        ->afterStateUpdated(function ($state, Forms\Set $set) {
+                                            // Lưu các đáp án đúng dưới dạng JSON
+                                            $set('correct_answer', json_encode($state));
+                                        }),
                                 ];
 
                             default:
@@ -159,10 +196,12 @@ class QuestionAnswerResource extends Resource
                     ->badge()
                     ->color(fn(string $state): string => match ($state) {
                         'fill_in_blank' => 'gray',
+                        'fill_in_blank_with_options' => 'gray',
                         'correct_answer' => 'success',
                         'true_false_not_given' => 'warning',
                         'multiple_choice' => 'info',
                         'matching' => 'primary',
+                        default => 'gray',
                     }),
                 Tables\Columns\TextColumn::make('correct_answer')
                     ->searchable(),
